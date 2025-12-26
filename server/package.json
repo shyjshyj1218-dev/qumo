@@ -1,0 +1,26 @@
+{
+  "name": "qumo-server",
+  "version": "1.0.0",
+  "description": "Qumo Quiz App Backend Server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": ["quiz", "socket.io", "matching"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.6.1",
+    "redis": "^4.6.7",
+    "pg": "^8.11.0",
+    "glicko2": "^1.2.1",
+    "dotenv": "^16.3.1",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
+
