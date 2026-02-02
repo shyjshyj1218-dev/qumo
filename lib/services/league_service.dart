@@ -62,7 +62,7 @@ class LeagueService {
         .maybeSingle();
 
     if (existingLeague != null) {
-      return LeagueModel.fromSupabase(existingLeague as Map<String, dynamic>);
+      return LeagueModel.fromSupabase(existingLeague);
     }
 
     // 리그가 없으면 생성
@@ -76,7 +76,7 @@ class LeagueService {
         .select()
         .single();
 
-    return LeagueModel.fromSupabase(newLeague as Map<String, dynamic>);
+    return LeagueModel.fromSupabase(newLeague);
   }
 
   // 사용자를 리그에 등록
@@ -116,7 +116,7 @@ class LeagueService {
         .eq('id', userId)
         .single();
 
-    return UserModel.fromSupabase(response as Map<String, dynamic>);
+    return UserModel.fromSupabase(response);
   }
 
   // 리그 랭킹 가져오기 (리그 점수 순)
@@ -141,8 +141,6 @@ class LeagueService {
         ''')
         .eq('league_id', leagueId)
         .order('league_score', ascending: false);
-
-    if (response == null) return [];
 
     return (response as List).cast<Map<String, dynamic>>();
   }
@@ -170,7 +168,7 @@ class LeagueService {
         .select()
         .eq('week_start_date', lastWeekMonday.toIso8601String().split('T')[0]);
 
-    if (lastWeekLeagues == null || (lastWeekLeagues as List).isEmpty) {
+    if ((lastWeekLeagues as List).isEmpty) {
       return; // 지난 주 리그가 없으면 종료
     }
 
@@ -194,7 +192,7 @@ class LeagueService {
         ''')
         .eq('league_id', league.id);
 
-    if (rankings == null || (rankings as List).isEmpty) {
+    if ((rankings as List).isEmpty) {
       return;
     }
 
@@ -202,7 +200,6 @@ class LeagueService {
 
     // 각 사용자의 최종 레이팅으로 리그 점수 계산 및 업데이트
     for (var rankingData in rankingsList) {
-      final userId = rankingData['user_id'] as String;
       final ratingAtStart = rankingData['rating_at_start'] as int;
       final userData = rankingData['users'] as Map<String, dynamic>?;
       final ratingAtEnd = userData?['rating'] as int? ?? ratingAtStart;
@@ -224,8 +221,6 @@ class LeagueService {
         .select()
         .eq('league_id', league.id)
         .order('league_score', ascending: false);
-
-    if (updatedRankings == null) return;
 
     final sortedRankings = (updatedRankings as List).cast<Map<String, dynamic>>();
     final totalPlayers = sortedRankings.length;

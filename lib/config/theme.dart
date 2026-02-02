@@ -8,7 +8,6 @@ class AppTheme {
       colorScheme: ColorScheme.light(
         primary: AppColors.primary,
         secondary: AppColors.primaryLight,
-        background: AppColors.background,
         surface: AppColors.backgroundWhite,
         error: AppColors.difficultyExpert,
       ),
@@ -76,4 +75,3 @@ class AppTheme {
     );
   }
 }
-

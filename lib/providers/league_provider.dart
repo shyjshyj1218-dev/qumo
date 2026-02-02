@@ -1,7 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/league_service.dart';
 import '../models/league.dart';
-import '../models/user.dart';
 
 final leagueServiceProvider = Provider<LeagueService>((ref) {
   return LeagueService();

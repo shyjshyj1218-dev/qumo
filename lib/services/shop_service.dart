@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'supabase_service.dart';
 
 class ShopService {
@@ -13,32 +14,24 @@ class ShopService {
           .eq('id', itemId)
           .single();
 
-      if (item == null) return false;
-
-      // 사용자 정보 가져오기
       final user = await supabase
           .from('users')
           .select('coins, tickets')
           .eq('id', userId)
           .single();
 
-      if (user == null) return false;
-
       final currentCoins = (user['coins'] ?? 0) as int;
       final currentTickets = (user['tickets'] ?? 0) as int;
 
       int price = 0;
-      String currency = '';
 
       if (useCoins) {
         price = item['price_coins'] as int? ?? 0;
-        currency = 'coins';
         if (price == 0 || currentCoins < price) {
           return false; // 코인 부족
         }
       } else {
         price = item['price_tickets'] as int? ?? 0;
-        currency = 'tickets';
         if (price == 0 || currentTickets < price) {
           return false; // 티켓 부족
         }
@@ -68,7 +61,7 @@ class ShopService {
 
       return true;
     } catch (e) {
-      print('아이템 구매 오류: $e');
+      debugPrint('아이템 구매 오류: $e');
       return false;
     }
   }
@@ -84,8 +77,6 @@ class ShopService {
           .select('coins, tickets')
           .eq('id', userId)
           .single();
-
-      if (user == null) return false;
 
       final currentCoins = (user['coins'] ?? 0) as int;
       final currentTickets = (user['tickets'] ?? 0) as int;
@@ -104,7 +95,7 @@ class ShopService {
 
       return true;
     } catch (e) {
-      print('인앱 결제 처리 오류: $e');
+      debugPrint('인앱 결제 처리 오류: $e');
       return false;
     }
   }

@@ -4,10 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../config/colors.dart';
 import '../../models/user.dart';
 import '../../models/league.dart';
-import '../../utils/constants.dart';
-import '../../services/supabase_service.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/user_provider.dart';
 import '../../providers/league_provider.dart';
 
 class RankingChartWidget extends ConsumerStatefulWidget {
@@ -49,7 +46,7 @@ class _RankingChartWidgetState extends ConsumerState<RankingChartWidget> {
               return _buildLeagueInfo(league);
             },
             loading: () => const SizedBox.shrink(),
-            error: (_, __) => const SizedBox.shrink(),
+            error: (e, s) => const SizedBox.shrink(),
           ),
           // 랭킹 헤더
           _buildRankingHeader(),
@@ -111,7 +108,7 @@ class _RankingChartWidgetState extends ConsumerState<RankingChartWidget> {
 
   Widget _buildTierIcon(String tier) {
     // 티어별 SVG 파일 경로
-    final tierIconPath = 'assets/images/league/${tier}.svg';
+    final tierIconPath = 'assets/images/league/$tier.svg';
     
     return SizedBox(
       width: 80,
@@ -162,28 +159,6 @@ class _RankingChartWidgetState extends ConsumerState<RankingChartWidget> {
         return AppColors.primary;
     }
   }
-
-  String _getTierName(String tier) {
-    switch (tier) {
-      case 'bronze':
-        return '브론즈';
-      case 'silver':
-        return '실버';
-      case 'gold':
-        return '골드';
-      case 'sapphire':
-        return '사이파어';
-      case 'ruby':
-        return '루비';
-      case 'diamond':
-        return '다이아';
-      case 'crystal':
-        return '크리스탈';
-      default:
-        return '브론즈';
-    }
-  }
-
 
   Widget _buildRankingHeader() {
     return Container(

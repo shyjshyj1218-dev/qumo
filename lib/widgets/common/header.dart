@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../config/colors.dart';
 import '../../providers/user_provider.dart';
-import '../../providers/auth_provider.dart';
 
 class Header extends ConsumerWidget {
   final VoidCallback? onProfileTap;
@@ -109,7 +108,7 @@ class Header extends ConsumerWidget {
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha:0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

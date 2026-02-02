@@ -11,6 +11,7 @@ import '../screens/quiz/quiz_room_screen.dart';
 import '../screens/quiz/challenge_quiz_screen.dart';
 import '../screens/matching/matching_screen.dart';
 import '../screens/matching/realtime_match_game_screen.dart';
+import '../screens/matching/simple_match_game_screen.dart';
 import '../screens/matching/match_result_screen.dart';
 import '../screens/mission/mission_screen.dart';
 import '../screens/ranking/ranking_screen.dart';
@@ -19,6 +20,7 @@ import '../screens/friends/friends_screen.dart';
 import '../screens/settings/settings_screen.dart';
 import '../models/match_user.dart';
 import '../models/quiz_question.dart';
+import '../widgets/common/main_layout.dart';
 
 final router = GoRouter(
   initialLocation: '/auth',
@@ -46,10 +48,38 @@ final router = GoRouter(
         return NicknameSetupScreen(userId: userId);
       },
     ),
-    GoRoute(
-      path: '/home',
-      builder: (context, state) => const HomeScreen(),
+    // 메인 탭 화면들을 ShellRoute로 감싸기 (하단바가 있는 화면들)
+    ShellRoute(
+      builder: (context, state, child) {
+        return MainLayout(
+          currentPath: state.uri.path,
+          child: child,
+        );
+      },
+      routes: [
+        GoRoute(
+          path: '/home',
+          builder: (context, state) => const HomeScreen(),
+        ),
+        GoRoute(
+          path: '/mission',
+          builder: (context, state) => const MissionScreen(),
+        ),
+        GoRoute(
+          path: '/challenge-quiz',
+          builder: (context, state) => const ChallengeQuizScreen(),
+        ),
+        GoRoute(
+          path: '/ranking',
+          builder: (context, state) => const RankingScreen(),
+        ),
+        GoRoute(
+          path: '/shop',
+          builder: (context, state) => const ShopScreen(),
+        ),
+      ],
     ),
+    // 하단바가 필요 없는 화면들
     GoRoute(
       path: '/profile',
       builder: (context, state) => const ProfileScreen(),
@@ -66,10 +96,6 @@ final router = GoRouter(
       },
     ),
     GoRoute(
-      path: '/challenge-quiz',
-      builder: (context, state) => const ChallengeQuizScreen(),
-    ),
-    GoRoute(
       path: '/matching',
       builder: (context, state) => const MatchingScreen(),
     ),
@@ -77,6 +103,16 @@ final router = GoRouter(
       path: '/realtime-match-game',
       builder: (context, state) {
         final data = state.extra as Map<String, dynamic>?;
+        
+        // 새로운 단순 문제 화면 (1개 문제)
+        if (data?['roomId'] != null && data?['question'] != null) {
+          return SimpleMatchGameScreen(
+            roomId: data!['roomId'] as String,
+            question: data['question'] as QuizQuestion,
+          );
+        }
+        
+        // 기존 화면 (여러 문제)
         return RealtimeMatchGameScreen(
           opponent: data?['opponent'] as MatchUser?,
           matchId: data?['matchId'] as String?,
@@ -91,22 +127,10 @@ final router = GoRouter(
         return MatchResultScreen(
           result: data?['result'] as Map<String, dynamic>,
           opponent: data?['opponent'] as MatchUser,
-          playerCorrectCount: data?['playerCorrectCount'] as int ?? 0,
-          opponentCorrectCount: data?['opponentCorrectCount'] as int ?? 0,
+          playerCorrectCount: (data?['playerCorrectCount'] as int?) ?? 0,
+          opponentCorrectCount: (data?['opponentCorrectCount'] as int?) ?? 0,
         );
       },
-    ),
-    GoRoute(
-      path: '/mission',
-      builder: (context, state) => const MissionScreen(),
-    ),
-    GoRoute(
-      path: '/ranking',
-      builder: (context, state) => const RankingScreen(),
-    ),
-    GoRoute(
-      path: '/shop',
-      builder: (context, state) => const ShopScreen(),
     ),
     GoRoute(
       path: '/friends',

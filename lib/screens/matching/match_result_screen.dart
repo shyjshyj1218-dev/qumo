@@ -7,7 +7,6 @@ import '../../providers/matching_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../providers/mission_provider.dart';
-import '../../services/mission_service.dart';
 
 class MatchResultScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> result;

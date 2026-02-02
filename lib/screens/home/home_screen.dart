@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
-import 'dart:ui' as ui;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
-import '../../widgets/common/bottom_navigation.dart';
 import '../../widgets/home/weekly_ranking_banner.dart';
 import '../../widgets/home/ranking_chart_widget.dart';
 import '../../providers/matching_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/user_provider.dart';
-import '../../services/socket_service.dart';
+import '../../models/quiz_question.dart';
+import '../../models/match_user.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -19,7 +18,6 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  int _currentNavIndex = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -44,30 +42,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           // 하단 시작하기 버튼
           _buildStartButton(),
-          // Bottom Navigation
-          BottomNavigation(
-            currentIndex: _currentNavIndex,
-            onTap: (index) {
-              setState(() => _currentNavIndex = index);
-              switch (index) {
-                case 0:
-                  // 홈은 이미 현재 화면
-                  break;
-                case 1:
-                  context.push('/mission');
-                  break;
-                case 2:
-                  context.push('/challenge-quiz');
-                  break;
-                case 3:
-                  context.push('/ranking');
-                  break;
-                case 4:
-                  context.push('/shop');
-                  break;
-              }
-            },
-          ),
         ],
       ),
     );
@@ -157,7 +131,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     color: AppColors.backgroundWhite,
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: AppColors.textSecondary.withOpacity(0.3),
+                      color: AppColors.textSecondary.withValues(alpha:0.3),
                       width: 1,
                     ),
                   ),
@@ -184,7 +158,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha:0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -252,53 +226,100 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       return;
     }
 
+    debugPrint('🔵 매칭 시작: userId=${currentUser.id}, rating=${userProfile.value?.rating ?? 1000}');
+    
     ref.read(matchingStatusProvider.notifier).state = 'matching';
 
     final socketService = ref.read(socketServiceProvider);
     final rating = userProfile.value?.rating ?? 1000;
 
-    // Socket 연결
-    socketService.connect(currentUser.id);
-
-    // 매칭 요청
-    socketService.requestMatch(currentUser.id, rating);
-
-    // 매칭 성공 리스너
-    socketService.onMatchFound((opponent, matchId, questions) {
-      ref.read(matchingStatusProvider.notifier).state = 'matched';
-      ref.read(opponentProvider.notifier).state = opponent;
-      ref.read(matchIdProvider.notifier).state = matchId;
-
-      if (mounted) {
-        context.push('/realtime-match-game', extra: {
-          'opponent': opponent,
-          'matchId': matchId,
-          'questions': questions,
-        });
-      }
+    // Socket 연결 - 연결 완료 후 매칭 요청
+    socketService.connect(currentUser.id, onConnected: (userId) {
+      debugPrint('✅ Socket 연결 완료, 매칭 요청 전송...');
+      socketService.requestMatch(userId, rating);
     });
 
     // 매칭 큐 상태 리스너
-    socketService.onMatchQueued((queueSize) {
-      // 큐 크기 표시 (선택사항)
+    socketService.onMatchQueued(() {
+      debugPrint('⏳ 매칭 대기 중...');
     });
 
-    // 매칭 에러 리스너
-    socketService.removeListener('match-error');
-    socketService.socket?.on('match-error', (data) {
-      if (mounted) {
-        ref.read(matchingStatusProvider.notifier).state = 'idle';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(data['message'] ?? '매칭 중 오류가 발생했습니다')),
-        );
+    // 매칭 성공 리스너
+    socketService.onMatchFound((data) {
+      debugPrint('🎉 매칭 성공!');
+      debugPrint('  - roomId: ${data['roomId']}');
+      debugPrint('  - players: ${data['players']}');
+      
+      ref.read(matchingStatusProvider.notifier).state = 'matched';
+      
+      // roomId 저장
+      final roomId = data['roomId'] as String?;
+      if (roomId != null) {
+        ref.read(matchIdProvider.notifier).state = roomId;
       }
-    });
-
-    // 매칭 취소 확인 리스너
-    socketService.removeListener('match-cancelled');
-    socketService.socket?.on('match-cancelled', (_) {
-      if (mounted) {
-        ref.read(matchingStatusProvider.notifier).state = 'idle';
+      
+      // 문제 배열 파싱
+      List<QuizQuestion> questions = [];
+      if (data['questions'] != null && data['questions'] is List) {
+        try {
+          final questionsData = data['questions'] as List;
+          questions = questionsData.map((q) {
+            final questionData = q as Map<String, dynamic>;
+            return QuizQuestion(
+              id: questionData['id']?.toString() ?? '',
+              question: questionData['question'] ?? '',
+              options: List<String>.from(questionData['options'] ?? []),
+              answer: questionData['answer'] ?? '',
+              category: questionData['category'],
+              difficulty: questionData['difficulty'] ?? 'beginner',
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            );
+          }).toList();
+          debugPrint('✅ 문제 ${questions.length}개 파싱 성공');
+        } catch (e) {
+          debugPrint('❌ 문제 파싱 실패: $e');
+        }
+      }
+      
+      // 상대방 정보 파싱
+      MatchUser? opponent;
+      if (data['players'] != null && data['players'] is List) {
+        final players = data['players'] as List;
+        final currentUser = ref.read(currentUserProvider);
+        if (currentUser != null) {
+          final opponentData = players.firstWhere(
+            (p) => (p as Map)['userId'] != currentUser.id,
+            orElse: () => players.isNotEmpty ? players[0] : null,
+          );
+          
+          if (opponentData != null) {
+            final opponentMap = opponentData as Map<String, dynamic>;
+            opponent = MatchUser(
+              id: opponentMap['userId'] ?? '',
+              nickname: '상대방',
+              profileImage: null,
+              rating: opponentMap['rating'] ?? 1000,
+            );
+          }
+        }
+      }
+      
+      // 문제 화면으로 이동
+      if (mounted && questions.isNotEmpty && roomId != null) {
+        context.push('/realtime-match-game', extra: {
+          'roomId': roomId,
+          'opponent': opponent,
+          'matchId': roomId,
+          'questions': questions,
+        });
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('문제를 받아올 수 없습니다'),
+            duration: Duration(seconds: 3),
+          ),
+        );
       }
     });
   }
@@ -306,8 +327,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void _cancelMatching() {
     final socketService = ref.read(socketServiceProvider);
     
-    // 매칭 취소 요청
-    socketService.cancelMatch();
+    // Socket 연결 해제
+    socketService.disconnect();
     
     // 상태를 idle로 변경
     ref.read(matchingStatusProvider.notifier).state = 'idle';

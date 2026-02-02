@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import '../models/mission.dart';
 import 'supabase_service.dart';
 
@@ -27,8 +28,6 @@ class MissionService {
         .select()
         .order('created_at', ascending: true);
 
-    if (response == null) return [];
-
     return (response as List)
         .map((data) => Mission.fromSupabase(data as Map<String, dynamic>))
         .toList();
@@ -47,8 +46,7 @@ class MissionService {
 
     final progressMap = <String, UserMissionProgress>{};
 
-    if (response != null && response is List) {
-      for (var data in response) {
+    for (var data in response as List) {
         final missionId = data['mission_id'] as String;
         progressMap[missionId] = UserMissionProgress(
           missionId: missionId,
@@ -59,7 +57,6 @@ class MissionService {
               ? DateTime.parse(data['completed_at'])
               : null,
         );
-      }
     }
 
     return progressMap;
@@ -76,7 +73,7 @@ class MissionService {
           .ilike('title', '%출석%')
           .maybeSingle();
 
-      if (attendanceMission == null) return false;
+      if (attendanceMission == null) return false; // maybeSingle() can return null
 
       final missionId = attendanceMission['id'] as String;
       final today = DateTime.now();
@@ -115,7 +112,7 @@ class MissionService {
 
       return true;
     } catch (e) {
-      print('출석체크 미션 완료 오류: $e');
+      debugPrint('출석체크 미션 완료 오류: $e');
       return false;
     }
   }
@@ -130,7 +127,7 @@ class MissionService {
           .eq('mission_type', 'daily')
           .ilike('title', '%매칭%');
 
-      if (matchMissions == null || (matchMissions as List).isEmpty) return;
+      if ((matchMissions as List).isEmpty) return;
 
       final today = DateTime.now();
       final todayStart = DateTime(today.year, today.month, today.day);
@@ -198,7 +195,7 @@ class MissionService {
         }
       }
     } catch (e) {
-      print('매칭 횟수 업데이트 오류: $e');
+      debugPrint('매칭 횟수 업데이트 오류: $e');
     }
   }
 
@@ -212,8 +209,6 @@ class MissionService {
         .select('coins, tickets')
         .eq('id', userId)
         .single();
-
-    if (user == null) return;
 
     final currentCoins = (user['coins'] ?? 0) as int;
     final currentTickets = (user['tickets'] ?? 0) as int;
@@ -237,8 +232,6 @@ class MissionService {
           .select()
           .eq('id', missionId)
           .single();
-
-      if (mission == null) return false;
 
       final today = DateTime.now();
       final todayStart = DateTime(today.year, today.month, today.day);
@@ -276,7 +269,7 @@ class MissionService {
 
       return true;
     } catch (e) {
-      print('미션 완료 오류: $e');
+      debugPrint('미션 완료 오류: $e');
       return false;
     }
   }

@@ -1,776 +1,590 @@
-// .env 파일 경로 설정 (루트 디렉토리의 .env 사용)
-const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const redis = require('redis');
-const { Pool } = require('pg');
-const { Glicko2 } = require('glicko2');
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import { randomUUID } from "crypto";
+import pkg from "pg";
+import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+// .env 파일 로드 (프로젝트 루트의 .env)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenv.config({ path: join(__dirname, "..", ".env") });
+
+const { Pool } = pkg;
 
 const app = express();
 const server = http.createServer(app);
 
-// CORS 설정
 const io = new Server(server, {
   cors: {
-    origin: "*", // 프로덕션에서는 특정 도메인으로 제한
-    methods: ["GET", "POST"]
-  }
+    origin: "*",   // 개발 중 무조건 *
+    methods: ["GET", "POST"],
+  },
+  transports: ["websocket"],
 });
 
-// PostgreSQL 연결
+// PostgreSQL 연결 설정
 const dbUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
-console.log('데이터베이스 URL 확인:', dbUrl ? '설정됨' : '설정 안됨');
+let pool = null;
 
-// Supabase 연결 설정 (IPv4만 사용)
-const pool = new Pool({
-  connectionString: dbUrl,
-  ssl: dbUrl && dbUrl.includes('supabase') ? { 
-    rejectUnauthorized: false
-  } : false,
-  connectionTimeoutMillis: 30000,
-  max: 10,
-});
-
-// PostgreSQL 연결 테스트
-pool.on('error', (err) => {
-  console.error('PostgreSQL 연결 오류:', err);
-});
-
-pool.query('SELECT NOW()').then(() => {
-  console.log('PostgreSQL 연결 성공');
-}).catch((err) => {
-  console.error('PostgreSQL 연결 실패:');
-  console.error('에러 메시지:', err.message);
-  console.error('에러 코드:', err.code);
-  console.error('전체 에러:', err);
-  console.log('데이터베이스 연결 없이 계속 진행합니다...');
-});
-
-// Redis 클라이언트
-const redisClient = redis.createClient({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379
-});
-
-redisClient.on('error', (err) => {
-  console.error('Redis Client Error:', err.message);
-  console.log('Redis 연결 실패 - 매칭 기능이 제한될 수 있습니다.');
-});
-
-// Redis 연결 (실패해도 서버는 계속 실행)
-redisClient.connect().catch((err) => {
-  console.error('Redis 연결 실패:', err.message);
-  console.log('Redis 없이 서버를 계속 실행합니다. 매칭 기능이 제한될 수 있습니다.');
-});
-
-// Glicko-2 설정
-const glickoSettings = {
-  tau: 0.5,
-  rating: 1500,
-  rd: 350,
-  vol: 0.06
-};
-
-const ranking = new Glicko2(glickoSettings);
-
-// 매칭 큐 관리
-const matchQueue = new Map(); // userId -> { socketId, rating, startTime, range }
-const activeMatches = new Map(); // matchId -> match data
-const userSockets = new Map(); // userId -> socketId
-
-// 매칭 범위 확장 함수
-function expandMatchRange(userId) {
-  const user = matchQueue.get(userId);
-  if (!user) return;
-  
-  // 매칭 범위를 점차 확장: ±25, ±50, ±75, ±100, ...
-  const expansions = [25, 50, 75, 100, 150, 200, 300, 500];
-  const currentRange = user.range || 25;
-  const nextIndex = expansions.findIndex(r => r > currentRange);
-  
-  if (nextIndex !== -1) {
-    user.range = expansions[nextIndex];
-    console.log(`매칭 범위 확장: 사용자 ${userId}, 새 범위: ±${user.range}`);
-  }
-}
-
-// 메모리 기반 매칭 (Redis 없을 때 사용)
-function _tryMatchFromMemory(userId, minRating, maxRating) {
-  for (const [otherUserId, otherUser] of matchQueue.entries()) {
-    if (otherUserId === userId) continue;
-    
-    if (otherUser.rating >= minRating && otherUser.rating <= maxRating) {
-      // 매칭 성공!
-      matchQueue.delete(userId);
-      matchQueue.delete(otherUserId);
-      
-      return {
-        userId: otherUser.userId,
-        socketId: otherUser.socketId,
-        rating: otherUser.rating
-      };
-    }
-  }
-  
-  return null;
-}
-
-// 매칭 시도 함수
-async function tryMatch(userId) {
-  const user = matchQueue.get(userId);
-  if (!user) return null;
-
-  const minRating = user.rating - user.range;
-  const maxRating = user.rating + user.range;
-
-  // Redis에서 매칭 가능한 사용자 찾기
-  try {
-    // Redis 연결 확인
-    if (!redisClient.isOpen) {
-      // Redis가 연결되지 않았으면 메모리 큐만 사용
-      return _tryMatchFromMemory(userId, minRating, maxRating);
-    }
-    
-  const queueKey = 'match_queue';
-  const allUsers = await redisClient.hGetAll(queueKey);
-  
-  for (const [otherUserId, data] of Object.entries(allUsers)) {
-    if (otherUserId === userId) continue;
-    
-    const otherUser = JSON.parse(data);
-    if (otherUser.rating >= minRating && otherUser.rating <= maxRating) {
-      // 매칭 성공!
-      await redisClient.hDel(queueKey, userId, otherUserId);
-      matchQueue.delete(userId);
-      matchQueue.delete(otherUserId);
-      
-      return otherUser;
-    }
-    }
-  } catch (err) {
-    // Redis 오류 시 메모리 큐 사용
-    console.error('Redis 매칭 오류, 메모리 큐 사용:', err.message);
-    return _tryMatchFromMemory(userId, minRating, maxRating);
-  }
-  
-  return null;
-}
-
-// 문제 랜덤 선택 함수
-async function getRandomQuestions(count = 10) {
-  const query = `
-    SELECT id, question, options, answer, category, difficulty
-    FROM quiz_questions
-    ORDER BY RANDOM()
-    LIMIT $1
-  `;
-  
-  const result = await pool.query(query, [count]);
-  return result.rows;
-}
-
-// 매칭 생성 및 문제 할당
-async function createMatch(player1, player2) {
-  const matchId = `match_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  const questions = await getRandomQuestions(10);
-  
-  // 사용자 정보 가져오기
-  const player1Data = await pool.query(
-    'SELECT id, nickname, profile_image FROM users WHERE id = $1',
-    [player1.userId]
-  );
-  const player2Data = await pool.query(
-    'SELECT id, nickname, profile_image FROM users WHERE id = $1',
-    [player2.userId]
-  );
-  
-  const p1Info = player1Data.rows[0] || { nickname: '플레이어1', profile_image: null };
-  const p2Info = player2Data.rows[0] || { nickname: '플레이어2', profile_image: null };
-  
-  const match = {
-    id: matchId,
-    player1: {
-      userId: player1.userId,
-      socketId: player1.socketId,
-      rating: player1.rating,
-      nickname: p1Info.nickname,
-      profileImage: p1Info.profile_image
-    },
-    player2: {
-      userId: player2.userId,
-      socketId: player2.socketId,
-      rating: player2.rating,
-      nickname: p2Info.nickname,
-      profileImage: p2Info.profile_image
-    },
-    questions: questions,
-    status: 'in_progress',
-    createdAt: new Date(),
-    player1Progress: 0,
-    player2Progress: 0,
-    player1CorrectCount: 0,
-    player2CorrectCount: 0,
-    player1FinishTime: null,
-    player2FinishTime: null
-  };
-  
-  activeMatches.set(matchId, match);
-  
-  // 데이터베이스에 매칭 저장
-  try {
-    await pool.query(`
-      INSERT INTO matches (
-        id, player1_id, player2_id, status, mode, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6)
-    `, [
-      matchId,
-      player1.userId,
-      player2.userId,
-      'in_progress',
-      '1v1', // 게임 모드
-      new Date()
-    ]);
-  } catch (err) {
-    // questions 컬럼이 있으면 포함
-    if (err.message.includes('column "questions"')) {
-      try {
-        await pool.query(`
-          INSERT INTO matches (
-            id, player1_id, player2_id, status, mode, questions, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        `, [
-          matchId,
-          player1.userId,
-          player2.userId,
-          'in_progress',
-          '1v1',
-          JSON.stringify(questions.map(q => q.id)),
-          new Date()
-        ]);
-      } catch (err2) {
-        // mode 컬럼이 없으면 제외
-        await pool.query(`
-          INSERT INTO matches (
-            id, player1_id, player2_id, status, questions, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6)
-        `, [
-          matchId,
-          player1.userId,
-          player2.userId,
-          'in_progress',
-          JSON.stringify(questions.map(q => q.id)),
-          new Date()
-        ]);
-      }
-    } else {
-      throw err;
-    }
-  }
-  
-  // 사용자의 마지막 게임 시간 업데이트 (게임 시작 시)
-  const gameStartTime = new Date();
-  await pool.query(`
-    UPDATE users 
-    SET last_game_time = $1
-    WHERE id IN ($2, $3)
-  `, [gameStartTime, player1.userId, player2.userId]).catch(err => {
-    // last_game_time 컬럼이 없으면 무시
-    if (!err.message.includes('column "last_game_time"')) {
-      console.error('last_game_time 업데이트 오류:', err);
-    }
+if (dbUrl) {
+  pool = new Pool({
+    connectionString: dbUrl,
+    ssl: dbUrl.includes("supabase") ? { rejectUnauthorized: false } : false,
   });
   
-  return match;
+  pool.on("error", (err) => {
+    console.error("❌ PostgreSQL 연결 오류:", err);
+  });
+  
+  console.log("✅ PostgreSQL 연결 설정 완료");
+} else {
+  console.log("⚠️ DATABASE_URL이 설정되지 않았습니다. DB 저장 기능이 비활성화됩니다.");
 }
 
-// 게임 결과 계산 및 레이팅 업데이트
-async function calculateMatchResult(matchId, match) {
-  const player1 = match.player1;
-  const player2 = match.player2;
+// 매칭 큐 (배열로 관리)
+let queue = []; // { socket, userId, rating, joinedAt, range }
+
+// 게임 상태 관리 (roomId별로 관리)
+const gameRooms = new Map(); // { roomId: { questions, answers: { userId: { questionIndex: answer } }, finished: Set<userId> } }
+
+// 매칭 로직: 레이팅 범위 내에서 상대방 찾기
+function findMatch(user) {
+  const now = Date.now();
   
-  // 승자 결정
-  let winnerId = null;
-  let result = 'draw';
-  
-  if (match.player1CorrectCount > match.player2CorrectCount) {
-    winnerId = player1.userId;
-    result = 'win';
-  } else if (match.player2CorrectCount > match.player1CorrectCount) {
-    winnerId = player2.userId;
-    result = 'lose';
-  } else {
-    // 정답 수가 같으면 시간으로 판단
-    if (match.player1FinishTime && match.player2FinishTime) {
-      if (match.player1FinishTime < match.player2FinishTime) {
-        winnerId = player1.userId;
-        result = 'win';
-      } else {
-        winnerId = player2.userId;
-        result = 'lose';
-      }
+  for (let i = 0; i < queue.length; i++) {
+    const opponent = queue[i];
+    const waitTime = (now - opponent.joinedAt) / 1000; // 초 단위
+    const range = 100 + Math.floor(waitTime / 5) * 50; // 5초마다 50씩 범위 확장
+    
+    if (Math.abs(opponent.rating - user.rating) <= range) {
+      queue.splice(i, 1); // 큐에서 제거
+      return opponent;
     }
   }
   
-  // 데이터베이스에서 현재 레이팅 정보 가져오기
-  const player1Data = await pool.query(
-    'SELECT rating, rating_deviation, rating_volatility FROM users WHERE id = $1',
-    [player1.userId]
-  );
-  const player2Data = await pool.query(
-    'SELECT rating, rating_deviation, rating_volatility FROM users WHERE id = $1',
-    [player2.userId]
-  );
-  
-  if (player1Data.rows.length === 0 || player2Data.rows.length === 0) {
-    console.error('사용자 데이터를 찾을 수 없습니다');
+  return null;
+}
+
+// 랜덤 문제 여러 개 가져오기
+async function getRandomQuestions(count = 10) {
+  if (!pool) {
+    console.log("⚠️ DB 연결이 없어 문제를 가져올 수 없습니다.");
+    return [];
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, question, options, answer, category, difficulty, created_at, updated_at
+       FROM quiz_questions
+       ORDER BY RANDOM()
+       LIMIT $1`,
+      [count]
+    );
+    
+    if (result.rows.length === 0) {
+      console.log("⚠️ 문제가 없습니다.");
+      return [];
+    }
+    
+    const questions = result.rows.map((row) => ({
+      id: row.id.toString(),
+      question: row.question,
+      options: row.options, // jsonb는 이미 배열로 파싱됨
+      answer: row.answer,
+      category: row.category,
+      difficulty: row.difficulty || 'beginner',
+    }));
+    
+    console.log(`📚 문제 ${questions.length}개 가져오기 성공`);
+    return questions;
+  } catch (error) {
+    console.error("❌ 문제 가져오기 실패:", error.message);
+    return [];
+  }
+}
+
+// 매칭 기록 DB 저장
+async function saveMatchToDB(roomId, player1Id, player2Id, player1Rating, player2Rating, questionIds) {
+  if (!pool) {
+    console.log("⚠️ DB 연결이 없어 매칭 기록을 저장할 수 없습니다.");
     return;
   }
-  
-  const p1Data = player1Data.rows[0];
-  const p2Data = player2Data.rows[0];
-  
-  // Glicko-2 레이팅 계산
-  const player1Rating = ranking.makePlayer(
-    p1Data.rating || 1500,
-    p1Data.rating_deviation || 350,
-    p1Data.rating_volatility || 0.06
-  );
-  
-  const player2Rating = ranking.makePlayer(
-    p2Data.rating || 1500,
-    p2Data.rating_deviation || 350,
-    p2Data.rating_volatility || 0.06
-  );
-  
-  // 승부 결과 설정
-  let outcome = 0.5; // 무승부
-  if (winnerId === player1.userId) {
-    outcome = 1; // player1 승리
-  } else if (winnerId === player2.userId) {
-    outcome = 0; // player2 승리
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO matches (id, player1_id, player2_id, status, mode, questions, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       RETURNING id`,
+      [roomId, player1Id, player2Id, "in_progress", "1v1", JSON.stringify(questionIds)]
+    );
+    
+    console.log(`💾 매칭 기록 저장 완료: ${result.rows[0].id}`);
+  } catch (error) {
+    console.error("❌ 매칭 기록 저장 실패:", error.message);
+    // DB 저장 실패해도 게임은 계속 진행
   }
-  
-  // 레이팅 업데이트
-  player1Rating.updateRating([player2Rating], [outcome]);
-  player2Rating.updateRating([player1Rating], [1 - outcome]);
-  
-  // 데이터베이스 업데이트
-  await pool.query(`
-    UPDATE users 
-    SET rating = $1, rating_deviation = $2, rating_volatility = $3, updated_at = NOW()
-    WHERE id = $4
-  `, [
-    Math.round(player1Rating.getRating()),
-    player1Rating.getRd(),
-    player1Rating.getVol(),
-    player1.userId
-  ]);
-  
-  await pool.query(`
-    UPDATE users 
-    SET rating = $1, rating_deviation = $2, rating_volatility = $3, updated_at = NOW()
-    WHERE id = $4
-  `, [
-    Math.round(player2Rating.getRating()),
-    player2Rating.getRd(),
-    player2Rating.getVol(),
-    player2.userId
-  ]);
-  
-  // 매칭 결과 업데이트
-  const gameCompletedAt = new Date();
-  await pool.query(`
-    UPDATE matches 
-    SET result = $1, winner_id = $2, finished_at = NOW(), game_completed_at = $3, status = 'finished'
-    WHERE id = $4
-  `, [result, winnerId, gameCompletedAt, matchId]).catch(err => {
-    // game_completed_at 컬럼이 없으면 finished_at만 업데이트
-    if (err.message.includes('column "game_completed_at"')) {
-      return pool.query(`
-        UPDATE matches 
-        SET result = $1, winner_id = $2, finished_at = NOW(), status = 'finished'
-        WHERE id = $3
-      `, [result, winnerId, matchId]);
-    }
-    throw err;
-  });
-  
-  return {
-    winnerId,
-    result,
-    player1NewRating: Math.round(player1Rating.getRating()),
-    player2NewRating: Math.round(player2Rating.getRating()),
-    player1RatingChange: Math.round(player1Rating.getRating()) - (p1Data.rating || 1500),
-    player2RatingChange: Math.round(player2Rating.getRating()) - (p2Data.rating || 1500)
-  };
 }
 
-// Socket.io 연결 처리
-io.on('connection', (socket) => {
-  console.log('사용자 연결:', socket.id);
+// 카테고리별 능력치 계산 함수들
+const CATEGORIES = ["생활", "사회", "과학", "지리", "역사", "IT", "스포츠", "문화"];
+const DIFFICULTY_WEIGHTS = {
+  "초급": 1,
+  "beginner": 1,
+  "중급": 2,
+  "intermediate": 2,
+  "상급": 3,
+  "advanced": 3,
+  "최상급": 4,
+  "expert": 4,
+};
+
+// 세션 점수 계산 (카테고리별)
+function calculateSessionScore(questions, answers) {
+  const sessionScore = {};
+  CATEGORIES.forEach((cat) => {
+    sessionScore[cat] = 0;
+  });
+
+  questions.forEach((question, index) => {
+    const answer = answers[index];
+    const isCorrect = answer && answer === question.answer;
+    let category = question.category || null;
+    const difficulty = question.difficulty || "beginner";
+    
+    // 카테고리 이름 정규화 (예: "상식 생활" -> "생활", "생활" -> "생활")
+    if (category) {
+      for (const cat of CATEGORIES) {
+        if (category.includes(cat) || category === cat) {
+          category = cat;
+          break;
+        }
+      }
+    }
+    
+    // 카테고리가 없거나 매칭되지 않으면 기본값 "생활" 사용
+    if (!category || !CATEGORIES.includes(category)) {
+      category = "생활";
+    }
+    
+    if (isCorrect && CATEGORIES.includes(category)) {
+      const weight = DIFFICULTY_WEIGHTS[difficulty] || 1;
+      sessionScore[category] = (sessionScore[category] || 0) + weight;
+    }
+  });
+
+  return sessionScore;
+}
+
+// EMA alpha 값 계산 (판수에 따라 감소)
+function calculateAlpha(gamesPlayed) {
+  // 초반(10판까지): 0.4, 이후 점점 감소
+  if (gamesPlayed < 10) {
+    return 0.4;
+  }
+  // 10판 이후: 지수적으로 감소 (최소 0.15)
+  const alpha = 0.4 * Math.exp(-(gamesPlayed - 10) / 20);
+  return Math.max(0.15, alpha);
+}
+
+// EMA 업데이트
+function updateEMA(prevEMA, sessionScore, alpha) {
+  const newEMA = {};
+  CATEGORIES.forEach((cat) => {
+    const prevValue = prevEMA[cat] || 0;
+    const sessionValue = sessionScore[cat] || 0;
+    newEMA[cat] = alpha * sessionValue + (1 - alpha) * prevValue;
+  });
+  return newEMA;
+}
+
+// 정규화 (0~100 범위)
+function normalizeEMA(ema) {
+  const MAX_SCORE = 40; // 10문제 * 최상급(4점) = 40점
+  const normalized = {};
+  CATEGORIES.forEach((cat) => {
+    const value = ema[cat] || 0;
+    normalized[cat] = Math.max(0, Math.min(100, (value / MAX_SCORE) * 100));
+  });
+  return normalized;
+}
+
+// 사용자 카테고리별 능력치 업데이트
+async function updateUserCategoryStats(userId, questions, answers) {
+  if (!pool) {
+    console.log("⚠️ DB 연결이 없어 능력치를 업데이트할 수 없습니다.");
+    return;
+  }
+
+  try {
+    // 1. 현재 능력치 조회
+    const currentStats = await pool.query(
+      `SELECT games_played, "생활", "사회", "과학", "지리", "역사", "IT", "스포츠", "문화"
+       FROM user_category_stats
+       WHERE user_id = $1`,
+      [userId]
+    );
+
+    let gamesPlayed = 0;
+    let prevEMA = {};
+    
+    if (currentStats.rows.length > 0) {
+      gamesPlayed = currentStats.rows[0].games_played || 0;
+      CATEGORIES.forEach((cat) => {
+        prevEMA[cat] = currentStats.rows[0][cat] || 0;
+      });
+    } else {
+      // 첫 게임인 경우 초기값 설정
+      CATEGORIES.forEach((cat) => {
+        prevEMA[cat] = 0;
+      });
+    }
+
+    // 2. 세션 점수 계산
+    const sessionScore = calculateSessionScore(questions, answers);
+    console.log(`📊 세션 점수 (${userId}):`, sessionScore);
+
+    // 3. Alpha 계산
+    const alpha = calculateAlpha(gamesPlayed);
+    console.log(`📈 Alpha (${userId}, ${gamesPlayed}판):`, alpha);
+
+    // 4. EMA 업데이트
+    const newEMA = updateEMA(prevEMA, sessionScore, alpha);
+    console.log(`📈 새로운 EMA (${userId}):`, newEMA);
+
+    // 5. 정규화 (0~100)
+    const normalized = normalizeEMA(newEMA);
+    console.log(`📊 정규화된 능력치 (${userId}):`, normalized);
+
+    // 6. DB 저장 (UPSERT)
+    const updateFields = CATEGORIES.map((cat, index) => `"${cat}" = $${index + 3}`).join(", ");
+    const values = [userId, gamesPlayed + 1, ...CATEGORIES.map((cat) => newEMA[cat])];
+
+    await pool.query(
+      `INSERT INTO user_category_stats (user_id, games_played, ${CATEGORIES.map((c) => `"${c}"`).join(", ")}, updated_at)
+       VALUES ($1, $2, ${CATEGORIES.map((_, i) => `$${i + 3}`).join(", ")}, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         games_played = EXCLUDED.games_played,
+         ${updateFields},
+         updated_at = NOW()`,
+      values
+    );
+
+    console.log(`✅ 능력치 업데이트 완료 (${userId}): ${gamesPlayed + 1}판`);
+    return normalized;
+  } catch (error) {
+    console.error(`❌ 능력치 업데이트 실패 (${userId}):`, error.message);
+    return null;
+  }
+}
+
+// 방 생성 및 매칭 성공 알림
+async function createRoom(socket1, socket2, user1, user2) {
+  const roomId = randomUUID();
   
-  // 사용자 연결
-  socket.on('user-connected', async (userId) => {
-    userSockets.set(userId, socket.id);
-    socket.userId = userId;
-    console.log('사용자 연결됨:', userId);
+  // 두 소켓을 같은 방에 입장시킴
+  socket1.join(roomId);
+  socket2.join(roomId);
+  
+  console.log(`✅ 방 생성: ${roomId}`);
+  console.log(`  - 사용자 1: ${user1.userId} (레이팅: ${user1.rating})`);
+  console.log(`  - 사용자 2: ${user2.userId} (레이팅: ${user2.rating})`);
+  
+  // 문제 10개 가져오기
+  const questions = await getRandomQuestions(10);
+  
+  // DB에 매칭 기록 저장
+  if (questions.length > 0) {
+    const questionIds = questions.map((q) => q.id);
+    await saveMatchToDB(
+      roomId,
+      user1.userId,
+      user2.userId,
+      user1.rating,
+      user2.rating,
+      questionIds
+    );
+  }
+  
+  // 게임 상태 초기화
+  gameRooms.set(roomId, {
+    questions: questions,
+    answers: {},
+    finished: new Set(),
   });
   
-  // 매칭 요청
-  socket.on('request-match', async (data) => {
-    const { user_id, rating } = data;
+  // 두 사용자에게 매칭 성공 알림 (문제 배열 포함)
+  io.to(roomId).emit("match-found", {
+    roomId: roomId,
+    players: [
+      {
+        userId: user1.userId,
+        rating: user1.rating,
+      },
+      {
+        userId: user2.userId,
+        rating: user2.rating,
+      },
+    ],
+    questions: questions, // 문제 배열 포함
+  });
+  
+  return roomId;
+}
+
+io.on("connection", (socket) => {
+  console.log("🟢 connected:", socket.id);
+
+  socket.on("request-match", async (user) => {
+    console.log("📥 match request:", user.userId, "rating:", user.rating);
+
+    // 소켓에 userId 저장 (나중에 결과 전송 시 사용)
+    socket.userId = user.userId;
+    socket.data = socket.data || {};
+    socket.data.userId = user.userId;
+
+    // 기존 큐에서 같은 사용자 제거 (중복 방지)
+    queue = queue.filter((q) => q.userId !== user.userId);
+
+    // 매칭 시도
+    const opponent = findMatch(user);
+
+    if (!opponent) {
+      // 매칭 실패 → 큐에 추가
+      queue.push({
+        socket,
+        userId: user.userId,
+        rating: user.rating,
+        joinedAt: Date.now(),
+        range: 100, // 초기 범위
+      });
+      
+      socket.emit("match-queued");
+      console.log(`⏳ 사용자 대기 중: ${user.userId} (레이팅: ${user.rating}), 큐 크기: ${queue.length}`);
+      
+      // 주기적으로 매칭 재시도 (5초마다)
+      const matchInterval = setInterval(async () => {
+        // 큐에서 자신 찾기
+        const queueIndex = queue.findIndex((q) => q.userId === user.userId);
+        if (queueIndex === -1) {
+          // 이미 매칭됨
+          clearInterval(matchInterval);
+          return;
+        }
+
+        // 범위 확장
+        const waitTime = (Date.now() - queue[queueIndex].joinedAt) / 1000;
+        queue[queueIndex].range = 100 + Math.floor(waitTime / 5) * 50;
+
+        // 매칭 재시도
+        const newOpponent = findMatch(user);
+        if (newOpponent) {
+          clearInterval(matchInterval);
+          queue = queue.filter((q) => q.userId !== user.userId);
+          
+          const opponentUser = {
+            userId: newOpponent.userId,
+            rating: newOpponent.rating,
+          };
+          await createRoom(socket, newOpponent.socket, user, opponentUser);
+          console.log(`✅ 매칭 성공 (재시도): ${user.userId} <-> ${newOpponent.userId}`);
+        }
+      }, 5000); // 5초마다 재시도
+
+      // disconnect 시 interval 정리
+      socket.on("disconnect", () => {
+        clearInterval(matchInterval);
+      });
+    } else {
+      // 매칭 성공
+      const opponentUser = {
+        userId: opponent.userId,
+        rating: opponent.rating,
+      };
+      await createRoom(socket, opponent.socket, user, opponentUser);
+      console.log(`✅ 매칭 성공 (즉시): ${user.userId} <-> ${opponent.userId}`);
+    }
+  });
+
+  // 답안 제출 (문제별)
+  socket.on("submit-answer", async (data) => {
+    const { roomId, userId, questionIndex, answer } = data;
+    console.log(`📥 답안 제출: roomId=${roomId}, userId=${userId}, questionIndex=${questionIndex}, answer=${answer}`);
     
-    if (!user_id || !rating) {
-      socket.emit('match-error', { message: '잘못된 요청입니다' });
+    const gameRoom = gameRooms.get(roomId);
+    if (!gameRoom) {
+      console.log(`⚠️ 게임 방을 찾을 수 없습니다: ${roomId}`);
       return;
     }
     
-    console.log('매칭 요청:', user_id, rating);
-    
-    // 매칭 큐에 추가
-    const matchData = {
-      userId: user_id,
-      socketId: socket.id,
-      rating: rating,
-      startTime: Date.now(),
-      range: 25
-    };
-    
-    matchQueue.set(user_id, matchData);
-    
-    // Redis에 추가 (연결되어 있을 때만)
-    try {
-      if (redisClient.isOpen) {
-        await redisClient.hSet('match_queue', user_id, JSON.stringify({
-          userId: user_id,
-          rating: rating,
-          socketId: socket.id
-        }));
-      }
-    } catch (err) {
-      console.error('Redis 저장 오류 (메모리 큐만 사용):', err.message);
+    // 답안 저장
+    if (!gameRoom.answers[userId]) {
+      gameRoom.answers[userId] = {};
     }
+    gameRoom.answers[userId][questionIndex] = answer;
     
-    socket.emit('match-queued', { queue_size: matchQueue.size });
+    // 정답 확인
+    const question = gameRoom.questions[questionIndex];
+    const isCorrect = question && question.answer === answer;
     
-    // 즉시 매칭 시도
-    let matched = false;
-    let attempts = 0;
-    const maxAttempts = 10; // 최대 10초 동안 시도
+    // 클라이언트에게 정답 여부 알림
+    socket.emit("answer-result", {
+      questionIndex: questionIndex,
+      isCorrect: isCorrect,
+      correctAnswer: question?.answer,
+    });
     
-    const matchInterval = setInterval(async () => {
-      attempts++;
-      
-      const opponent = await tryMatch(user_id);
-      
-      if (opponent) {
-        clearInterval(matchInterval);
-        matched = true;
-        
-        // 매칭 성공
-        const player1Data = matchQueue.get(user_id) || matchData;
-        const player2Data = {
-          userId: opponent.userId,
-          socketId: opponent.socketId,
-          rating: opponent.rating
-        };
-        
-        const player1 = {
-          userId: player1Data.userId,
-          socketId: player1Data.socketId,
-          rating: player1Data.rating
-        };
-        const player2 = player2Data;
-        
-        const match = await createMatch(player1, player2);
-        
-        // 두 사용자에게 매칭 성공 알림
-        const socket1 = io.sockets.sockets.get(player1.socketId);
-        const socket2 = io.sockets.sockets.get(player2.socketId);
-        
-        if (socket1) {
-          socket1.emit('match-found', {
-            match_id: match.id,
-            opponent: {
-              id: match.player2.userId,
-              nickname: match.player2.nickname || '상대방',
-              profile_image: match.player2.profileImage,
-              rating: match.player2.rating
-            },
-            questions: match.questions
-          });
-        }
-        
-        if (socket2) {
-          socket2.emit('match-found', {
-            match_id: match.id,
-            opponent: {
-              id: match.player1.userId,
-              nickname: match.player1.nickname || '상대방',
-              profile_image: match.player1.profileImage,
-              rating: match.player1.rating
-            },
-            questions: match.questions
-          });
-        }
-      } else if (attempts < maxAttempts) {
-        // 매칭 범위 확장
-        expandMatchRange(user_id);
-      } else {
-        clearInterval(matchInterval);
-        if (!matched) {
-          socket.emit('match-timeout', { message: '매칭 시간이 초과되었습니다' });
-        }
-      }
-    }, 1000); // 1초마다 시도
-  });
-  
-  // 매칭 취소
-  socket.on('cancel-match', async () => {
-    if (socket.userId) {
-      matchQueue.delete(socket.userId);
-      try {
-        if (redisClient.isOpen) {
-          await redisClient.hDel('match_queue', socket.userId);
-        }
-      } catch (err) {
-        console.error('Redis 삭제 오류:', err.message);
-      }
-      socket.emit('match-cancelled');
-    }
-  });
-  
-  // 게임 진행 상황 업데이트
-  socket.on('game-progress', async (data) => {
-    const { match_id, user_id, progress, correct_count } = data;
-    const match = activeMatches.get(match_id);
-    
-    if (!match) return;
-    
-    // 진행 상황 업데이트
-    if (match.player1.userId === user_id) {
-      match.player1Progress = progress;
-      match.player1CorrectCount = correct_count;
-    } else if (match.player2.userId === user_id) {
-      match.player2Progress = progress;
-      match.player2CorrectCount = correct_count;
-    }
-    
-    // 상대방에게 진행 상황 전송
-    const opponentId = match.player1.userId === user_id 
-      ? match.player2.userId 
-      : match.player1.userId;
-    const opponentSocketId = userSockets.get(opponentId);
-    
-    if (opponentSocketId) {
-      const opponentSocket = io.sockets.sockets.get(opponentSocketId);
-      if (opponentSocket) {
-        opponentSocket.emit('opponent-progress', {
-          progress: progress,
-          correct_count: correct_count
-        });
-      }
-    }
-    
-    // 데이터베이스 업데이트
-    const isPlayer1 = match.player1.userId === user_id;
-    await pool.query(`
-      UPDATE matches 
-      SET ${isPlayer1 ? 'player1_progress' : 'player2_progress'} = $1,
-          ${isPlayer1 ? 'player1_correct_count' : 'player2_correct_count'} = $2
-      WHERE id = $3
-    `, [progress, correct_count, match_id]);
+    console.log(`  - 정답 여부: ${isCorrect ? '정답' : '오답'}`);
   });
   
   // 게임 완료
-  socket.on('player-finished', async (data) => {
-    const { match_id, user_id, correct_count, total_questions } = data;
-    const match = activeMatches.get(match_id);
+  socket.on("game-finished", async (data) => {
+    const { roomId, userId } = data;
+    console.log(`🏁 게임 완료: roomId=${roomId}, userId=${userId}`);
     
-    if (!match) return;
-    
-    const finishTime = new Date();
-    
-    // 완료 시간 저장
-    if (match.player1.userId === user_id) {
-      match.player1FinishTime = finishTime;
-      match.player1Progress = total_questions;
-      match.player1CorrectCount = correct_count;
-    } else if (match.player2.userId === user_id) {
-      match.player2FinishTime = finishTime;
-      match.player2Progress = total_questions;
-      match.player2CorrectCount = correct_count;
+    const gameRoom = gameRooms.get(roomId);
+    if (!gameRoom) {
+      console.log(`⚠️ 게임 방을 찾을 수 없습니다: ${roomId}`);
+      return;
     }
+    
+    // 완료 플레이어 추가
+    gameRoom.finished.add(userId);
+    
+    // 정답 개수 계산
+    let correctCount = 0;
+    if (gameRoom.answers[userId]) {
+      const answers = gameRoom.answers[userId];
+      gameRoom.questions.forEach((question, index) => {
+        if (answers[index] === question.answer) {
+          correctCount++;
+        }
+      });
+    }
+    
+    console.log(`  - 정답 개수: ${correctCount}/${gameRoom.questions.length}`);
     
     // 상대방에게 완료 알림
-    const opponentId = match.player1.userId === user_id 
-      ? match.player2.userId 
-      : match.player1.userId;
-    const opponentSocketId = userSockets.get(opponentId);
-    
-    if (opponentSocketId) {
-      const opponentSocket = io.sockets.sockets.get(opponentSocketId);
-      if (opponentSocket) {
-        opponentSocket.emit('opponent-finished', {
-          correct_count: correct_count,
-          total_questions: total_questions
-        });
-      }
-    }
-    
-    // 데이터베이스 업데이트
-    const isPlayer1 = match.player1.userId === user_id;
-    await pool.query(`
-      UPDATE matches 
-      SET ${isPlayer1 ? 'player1_finish_time' : 'player2_finish_time'} = $1,
-          ${isPlayer1 ? 'player1_progress' : 'player2_progress'} = $2,
-          ${isPlayer1 ? 'player1_correct_count' : 'player2_correct_count'} = $3
-      WHERE id = $4
-    `, [finishTime, total_questions, correct_count, match_id]);
-    
-    // 두 플레이어 모두 완료했는지 확인
-    if (match.player1FinishTime && match.player2FinishTime) {
-      const result = await calculateMatchResult(match_id, match);
-      
-      // 두 사용자에게 결과 전송
-      const socket1 = io.sockets.sockets.get(match.player1.socketId);
-      const socket2 = io.sockets.sockets.get(match.player2.socketId);
-      
-      if (socket1) {
-        socket1.emit('both-finished', {
-          match_id: match_id,
-          winner_id: result.winnerId,
-          result: result.result,
-          player1_id: match.player1.userId,
-          player2_id: match.player2.userId,
-          player1_correct_count: match.player1CorrectCount,
-          player2_correct_count: match.player2CorrectCount,
-          player1_new_rating: result.player1NewRating,
-          player2_new_rating: result.player2NewRating,
-          player1_rating_change: result.player1RatingChange,
-          player2_rating_change: result.player2RatingChange
-        });
-      }
-      
-      if (socket2) {
-        socket2.emit('both-finished', {
-          match_id: match_id,
-          winner_id: result.winnerId,
-          result: result.result,
-          player1_id: match.player1.userId,
-          player2_id: match.player2.userId,
-          player1_correct_count: match.player1CorrectCount,
-          player2_correct_count: match.player2CorrectCount,
-          player1_new_rating: result.player1NewRating,
-          player2_new_rating: result.player2NewRating,
-          player1_rating_change: result.player1RatingChange,
-          player2_rating_change: result.player2RatingChange
-        });
-      }
-      
-      // 활성 매칭에서 제거
-      activeMatches.delete(match_id);
-    }
-  });
-  
-  // 기권
-  socket.on('surrender', async (data) => {
-    const { match_id, user_id } = data;
-    const match = activeMatches.get(match_id);
-    
-    if (!match) return;
-    
-    const opponentId = match.player1.userId === user_id 
-      ? match.player2.userId 
-      : match.player1.userId;
-    const opponentSocketId = userSockets.get(opponentId);
-    
-    if (opponentSocketId) {
-      const opponentSocket = io.sockets.sockets.get(opponentSocketId);
-      if (opponentSocket) {
-        opponentSocket.emit('opponent-surrendered');
-      }
-    }
-    
-    // 매칭 결과 업데이트 (기권 시)
-    const gameCompletedAt = new Date();
-    await pool.query(`
-      UPDATE matches 
-      SET result = $1, winner_id = $2, finished_at = NOW(), game_completed_at = $3, status = 'finished'
-      WHERE id = $4
-    `, ['surrender', opponentId, gameCompletedAt, match_id]).catch(err => {
-      // game_completed_at 컬럼이 없으면 finished_at만 업데이트
-      if (err.message.includes('column "game_completed_at"')) {
-        return pool.query(`
-          UPDATE matches 
-          SET result = $1, winner_id = $2, finished_at = NOW(), status = 'finished'
-          WHERE id = $3
-        `, ['surrender', opponentId, match_id]);
-      }
-      throw err;
+    io.to(roomId).emit("opponent-finished", {
+      userId: userId,
+      correctCount: correctCount,
+      totalQuestions: gameRoom.questions.length,
     });
     
-    activeMatches.delete(match_id);
-  });
-  
-  // 연결 해제
-  socket.on('disconnect', async () => {
-    console.log('사용자 연결 해제:', socket.id);
-    
-    if (socket.userId) {
-      matchQueue.delete(socket.userId);
-      try {
-        if (redisClient.isOpen) {
-          await redisClient.hDel('match_queue', socket.userId);
-        }
-      } catch (err) {
-        console.error('Redis 삭제 오류:', err.message);
-      }
-      userSockets.delete(socket.userId);
+    // 두 플레이어 모두 완료했는지 확인
+    if (gameRoom.finished.size === 2) {
+      // 두 플레이어의 정답 개수 계산 (각 플레이어별로)
+      const playerScores = {};
+      const playerIds = Array.from(gameRoom.finished);
       
-      // 활성 매칭에서 사용자 제거 및 상대방에게 알림
-      for (const [matchId, match] of activeMatches.entries()) {
-        if (match.player1.userId === socket.userId || match.player2.userId === socket.userId) {
-          const opponentId = match.player1.userId === socket.userId 
-            ? match.player2.userId 
-            : match.player1.userId;
-          const opponentSocketId = userSockets.get(opponentId);
-          
-          if (opponentSocketId) {
-            const opponentSocket = io.sockets.sockets.get(opponentSocketId);
-            if (opponentSocket) {
-              opponentSocket.emit('opponent-disconnected');
+      for (const playerId of playerIds) {
+        let score = 0;
+        if (gameRoom.answers[playerId]) {
+          const answers = gameRoom.answers[playerId];
+          gameRoom.questions.forEach((question, index) => {
+            // 답안이 있고 정답이면 점수 추가
+            if (answers[index] && answers[index] === question.answer) {
+              score++;
             }
-          }
-          
-          activeMatches.delete(matchId);
+          });
         }
+        playerScores[playerId] = score;
+        console.log(`  - ${playerId} 정답 개수: ${score}/${gameRoom.questions.length}`);
       }
+      
+      // 승자 결정
+      const player1Id = playerIds[0];
+      const player2Id = playerIds[1];
+      const player1Score = playerScores[player1Id] || 0;
+      const player2Score = playerScores[player2Id] || 0;
+      
+      // 각 플레이어의 결과 결정
+      let player1Result = 'draw';
+      let player2Result = 'draw';
+      let winnerId = null;
+      
+      if (player1Score > player2Score) {
+        player1Result = 'win';
+        player2Result = 'lose';
+        winnerId = player1Id;
+      } else if (player2Score > player1Score) {
+        player1Result = 'lose';
+        player2Result = 'win';
+        winnerId = player2Id;
+      }
+      
+      console.log(`🎯 게임 결과:`);
+      console.log(`  - ${player1Id}: ${player1Score}점 (${player1Result})`);
+      console.log(`  - ${player2Id}: ${player2Score}점 (${player2Result})`);
+      console.log(`  - 승자: ${winnerId || '무승부'}`);
+      
+      // 각 플레이어의 능력치 업데이트
+      for (const playerId of playerIds) {
+        const playerAnswers = gameRoom.answers[playerId] || {};
+        const answersArray = gameRoom.questions.map((_, index) => playerAnswers[index] || null);
+        
+        // 능력치 업데이트 (비동기, 실패해도 게임 결과는 전송)
+        updateUserCategoryStats(playerId, gameRoom.questions, answersArray).catch((err) => {
+          console.error(`⚠️ 능력치 업데이트 실패 (${playerId}):`, err.message);
+        });
+      }
+
+      // 방에 있는 모든 소켓에게 개별 결과 전송
+      const roomSockets = await io.in(roomId).fetchSockets();
+      
+      for (const roomSocket of roomSockets) {
+        // 소켓의 userId 확인 (request-match에서 설정됨)
+        const socketUserId = roomSocket.handshake.query?.userId || 
+                            roomSocket.data?.userId || 
+                            roomSocket.userId;
+        
+        let myScore, opponentScore, result;
+        
+        if (socketUserId === player1Id) {
+          myScore = player1Score;
+          opponentScore = player2Score;
+          result = player1Result;
+        } else if (socketUserId === player2Id) {
+          myScore = player2Score;
+          opponentScore = player1Score;
+          result = player2Result;
+        } else {
+          // userId를 찾을 수 없으면 기본값 사용
+          myScore = 0;
+          opponentScore = 0;
+          result = 'draw';
+        }
+        
+        roomSocket.emit("game-result", {
+          player1Id: player1Id,
+          player2Id: player2Id,
+          player1Score: player1Score,
+          player2Score: player2Score,
+          myScore: myScore,
+          opponentScore: opponentScore,
+          winnerId: winnerId,
+          result: result,
+        });
+        
+        console.log(`  - ${socketUserId}에게 결과 전송: 내 점수=${myScore}, 상대 점수=${opponentScore}, 결과=${result}`);
+      }
+      
+      // 게임 방 정리
+      gameRooms.delete(roomId);
     }
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.log("🔴 disconnected:", socket.id, reason);
+    
+    // 큐에서 제거
+    queue = queue.filter((q) => q.socket.id !== socket.id);
+    console.log(`⏳ 큐에서 제거됨, 남은 큐 크기: ${queue.length}`);
   });
 });
 
-const PORT = process.env.PORT || 3001;
-
-// 서버 시작 (에러 처리)
-try {
-  server.listen(PORT, () => {
-    console.log(`서버가 포트 ${PORT}에서 실행 중입니다`);
-  });
-  
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`포트 ${PORT}가 이미 사용 중입니다. 다른 포트를 사용하거나 기존 프로세스를 종료하세요.`);
-    } else {
-      console.error('서버 오류:', err);
-    }
-    process.exit(1);
-  });
-} catch (err) {
-  console.error('서버 시작 실패:', err);
-  process.exit(1);
-}
-
+server.listen(3001, "0.0.0.0", () => {
+  console.log("🚀 server running on 3001");
+});

@@ -5,7 +5,6 @@ import '../../models/user.dart';
 import '../../utils/constants.dart';
 import '../../services/supabase_service.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/user_provider.dart';
 
 class RankingScreen extends ConsumerStatefulWidget {
   const RankingScreen({super.key});
@@ -418,7 +417,7 @@ class _RankingScreenState extends ConsumerState<RankingScreen> {
     );
   }
 
-  Future<List<UserModel>> _fetchRankings(supabase) async {
+  Future<List<UserModel>> _fetchRankings(dynamic supabase) async {
     final response = await supabase
         .from(AppConstants.usersCollection)
         .select()

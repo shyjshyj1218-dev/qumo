@@ -5,7 +5,6 @@ import '../../config/colors.dart';
 import '../../providers/matching_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../providers/auth_provider.dart';
-import '../../services/socket_service.dart';
 
 class MatchingScreen extends ConsumerStatefulWidget {
   const MatchingScreen({super.key});
@@ -33,26 +32,25 @@ class _MatchingScreenState extends ConsumerState<MatchingScreen> {
     final socketService = ref.read(socketServiceProvider);
     final rating = userProfile.value?.rating ?? 1000;
 
-    socketService.connect(currentUser.id);
-    socketService.requestMatch(currentUser.id, rating);
+    socketService.connect(currentUser.id, onConnected: (userId) {
+      socketService.requestMatch(userId, rating);
+    });
 
-    socketService.onMatchFound((opponent, matchId, questions) {
+    socketService.onMatchFound((data) {
+      debugPrint('🎉 매칭 성공: $data');
       ref.read(matchingStatusProvider.notifier).state = 'matched';
-      ref.read(opponentProvider.notifier).state = opponent;
-      ref.read(matchIdProvider.notifier).state = matchId;
-
+      
+      // TODO: 나중에 문제 화면으로 이동
       if (mounted) {
-        context.push('/realtime-match-game', extra: {
-          'opponent': opponent,
-          'matchId': matchId,
-          'questions': questions,
-        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('매칭 성공! (문제 화면은 다음 단계에서 구현)')),
+        );
       }
     });
 
-    socketService.onMatchQueued((queueSize) {
+    socketService.onMatchQueued(() {
       setState(() {
-        _queueSize = queueSize;
+        _queueSize = 1; // 큐에 대기 중
       });
     });
 
@@ -73,7 +71,6 @@ class _MatchingScreenState extends ConsumerState<MatchingScreen> {
 
   void _cancelMatching() {
     final socketService = ref.read(socketServiceProvider);
-    socketService.cancelMatch();
     socketService.disconnect();
 
     if (mounted) {

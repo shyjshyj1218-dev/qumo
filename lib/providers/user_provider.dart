@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/user.dart';
-import '../services/auth_service.dart';
 import '../providers/auth_provider.dart';
 
 final userProfileProvider = FutureProvider<UserModel?>((ref) async {

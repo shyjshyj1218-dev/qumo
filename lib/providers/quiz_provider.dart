@@ -18,7 +18,7 @@ final quizQuestionsProvider = FutureProvider.family<List<QuizQuestion>, Map<Stri
 final currentQuestionIndexProvider = StateProvider<int>((ref) => 0);
 
 final currentQuestionProvider = Provider<QuizQuestion?>((ref) {
-  final questions = ref.watch(quizQuestionsProvider(Map<String, dynamic>()));
+  final questions = ref.watch(quizQuestionsProvider(<String, dynamic>{}));
   final index = ref.watch(currentQuestionIndexProvider);
   
   if (questions.value == null || questions.value!.isEmpty) return null;

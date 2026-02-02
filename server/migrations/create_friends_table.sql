@@ -25,3 +25,4 @@ COMMENT ON COLUMN friends.status IS '친구 요청 상태: pending(대기), acce
 
 
 
+

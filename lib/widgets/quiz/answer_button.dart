@@ -59,7 +59,7 @@ class AnswerButton extends StatelessWidget {
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: borderColor.withOpacity(0.2),
+                  color: borderColor.withValues(alpha:0.2),
                   shape: BoxShape.circle,
                 ),
                 child: Center(

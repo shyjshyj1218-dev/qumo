@@ -11,6 +11,10 @@ class ChallengeQuizScreen extends StatelessWidget {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('도전'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
+          onPressed: () => context.go('/home'),
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -68,7 +72,7 @@ class ChallengeQuizScreen extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.1),
+              color: Colors.black.withValues(alpha:0.1),
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),

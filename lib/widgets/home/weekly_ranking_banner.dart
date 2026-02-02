@@ -61,7 +61,7 @@ class WeeklyRankingBanner extends StatelessWidget {
                     shape: BoxShape.circle,
                     color: index == 0
                         ? AppColors.textWhite
-                        : AppColors.textWhite.withOpacity(0.3),
+                        : AppColors.textWhite.withValues(alpha:0.3),
                   ),
                 );
               }),

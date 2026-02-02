@@ -13,8 +13,6 @@ class BottomNavigation extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
-    
     return Container(
       decoration: const BoxDecoration(
         color: AppColors.backgroundWhite,

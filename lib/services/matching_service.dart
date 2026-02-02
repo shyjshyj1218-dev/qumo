@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import '../models/match.dart';
 import '../utils/constants.dart';
 import 'supabase_service.dart';
@@ -12,17 +13,16 @@ class MatchingService {
   }
 
   Future<Match?> getMatchById(String matchId) async {
-    final response = await supabase
-        .from(AppConstants.matchesCollection)
-        .select()
-        .eq('id', matchId)
-        .single();
-
-    if (response == null) {
+    try {
+      final response = await supabase
+          .from(AppConstants.matchesCollection)
+          .select()
+          .eq('id', matchId)
+          .single();
+      return Match.fromSupabase(response);
+    } catch (_) {
       return null;
     }
-
-    return Match.fromSupabase(response as Map<String, dynamic>);
   }
 
   Future<void> updateMatchProgress({
@@ -104,7 +104,7 @@ class MatchingService {
         return;
       }
       // 다른 오류는 로그만 남기고 계속 진행
-      print('match_answers 저장 오류: $e');
+      debugPrint('match_answers 저장 오류: $e');
     }
   }
 

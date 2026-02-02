@@ -11,7 +11,7 @@ class AppConstants {
   static String get baseUrl => 
       dotenv.env['API_BASE_URL'] ?? 'https://your-api-url.com';
   static String get socketUrl => 
-      dotenv.env['SOCKET_URL'] ?? 'http://192.168.219.102:3001';
+      dotenv.env['SOCKET_URL'] ?? 'http://192.168.219.105:3001';
 
   // Supabase 테이블/컬렉션 이름
   static const String usersCollection = 'users';

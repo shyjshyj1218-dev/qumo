@@ -8,7 +8,6 @@ import '../../models/quiz_question.dart';
 import '../../providers/matching_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/user_provider.dart';
-import '../../services/socket_service.dart';
 import '../../services/matching_service.dart';
 import '../../widgets/quiz/question_card.dart';
 import '../../widgets/quiz/answer_button.dart';
@@ -35,8 +34,8 @@ class _RealtimeMatchGameScreenState
     extends ConsumerState<RealtimeMatchGameScreen> {
   int _currentQuestionIndex = 0;
   String? _selectedAnswer;
-  Map<int, String> _answers = {};
-  Map<int, bool> _results = {};
+  final Map<int, String> _answers = {};
+  final Map<int, bool> _results = {};
   int _timeRemaining = 300; // 5 minutes
   Timer? _timer;
   bool _isFinished = false;
@@ -66,17 +65,17 @@ class _RealtimeMatchGameScreenState
 
   void _setupSocketListeners() {
     final socketService = ref.read(socketServiceProvider);
-    final currentUser = ref.read(currentUserProvider);
 
-    socketService.onOpponentProgress((progress, correctCount) {
+    // 정답 결과 리스너
+    socketService.onAnswerResult((questionIndex, isCorrect, correctAnswer) {
       if (mounted) {
         setState(() {
-          ref.read(opponentProgressProvider.notifier).state = progress;
-          ref.read(opponentCorrectCountProvider.notifier).state = correctCount;
+          _results[questionIndex] = isCorrect;
         });
       }
     });
 
+    // 상대방 완료 리스너
     socketService.onOpponentFinished((correctCount, totalQuestions) {
       if (mounted) {
         setState(() {
@@ -86,16 +85,23 @@ class _RealtimeMatchGameScreenState
       }
     });
 
-    socketService.onBothFinished((result) {
+    // 게임 결과 리스너
+    socketService.onGameResult((result) {
       if (mounted) {
-        // 서버에서 이미 player1_id와 player2_id를 포함해서 보내줌
-        _showResult(result);
-      }
-    });
-
-    socketService.onOpponentSurrendered(() {
-      if (mounted) {
-        _showResult({'result': 'win'});
+        // 서버에서 받은 점수 사용
+        final myScore = result['myScore'] as int? ?? 0;
+        final opponentScore = result['opponentScore'] as int? ?? 0;
+        
+        setState(() {
+          _opponentCorrectCount = opponentScore;
+        });
+        
+        // 결과에 점수 정보 추가
+        final resultWithScores = Map<String, dynamic>.from(result);
+        resultWithScores['myScore'] = myScore;
+        resultWithScores['opponentScore'] = opponentScore;
+        
+        _showResult(resultWithScores);
       }
     });
   }
@@ -108,25 +114,19 @@ class _RealtimeMatchGameScreenState
 
     final currentUser = ref.read(currentUserProvider);
     final socketService = ref.read(socketServiceProvider);
-    final questions = widget.questions ?? [];
 
-    final correctCount = _results.values.where((r) => r).length;
-
-    socketService.sendGameFinished(
-      matchId: widget.matchId ?? '',
-      userId: currentUser?.id ?? '',
-      correctCount: correctCount,
-      totalQuestions: questions.length,
-    );
-
-    // 매칭 서비스에 결과 저장
-    final matchingService = ref.read(matchingServiceProvider);
-    matchingService.finishMatch(
-      matchId: widget.matchId ?? '',
-      playerId: currentUser?.id ?? '',
-      correctCount: correctCount,
-      totalQuestions: questions.length,
-    );
+    if (currentUser != null && widget.matchId != null) {
+      socketService.sendGameFinished(widget.matchId!, currentUser.id);
+    }
+    
+    // TODO: 매칭 서비스에 결과 저장 (필요시)
+    // final matchingService = ref.read(matchingServiceProvider);
+    // matchingService.finishMatch(
+    //   matchId: widget.matchId ?? '',
+    //   playerId: currentUser?.id ?? '',
+    //   correctCount: correctCount,
+    //   totalQuestions: questions.length,
+    // );
   }
 
   void _showResult(Map<String, dynamic> result) {
@@ -136,11 +136,20 @@ class _RealtimeMatchGameScreenState
     if (mounted) {
       final opponent = widget.opponent;
       if (opponent != null) {
+        // 서버에서 받은 점수 사용 (우선순위)
+        final myScore = result['myScore'] as int? ?? _results.values.where((r) => r).length;
+        final opponentScore = result['opponentScore'] as int? ?? _opponentCorrectCount;
+        
+        debugPrint('📊 게임 결과:');
+        debugPrint('  - 내 점수: $myScore');
+        debugPrint('  - 상대 점수: $opponentScore');
+        debugPrint('  - 결과: ${result['result']}');
+        
         context.push('/match-result', extra: {
           'result': result,
           'opponent': opponent,
-          'playerCorrectCount': _results.values.where((r) => r).length,
-          'opponentCorrectCount': _opponentCorrectCount,
+          'playerCorrectCount': myScore,
+          'opponentCorrectCount': opponentScore,
         });
       }
     }
@@ -227,7 +236,7 @@ class _RealtimeMatchGameScreenState
                 children: [
                   QuestionCard(
                     question: currentQuestion.question,
-                    questionNumber: _currentQuestionIndex + 1,
+                    questionNumber: _currentQuestionIndex + 1, // 문제 번호는 1부터 시작 (1, 2, 3, ...)
                     totalQuestions: questions.length,
                   ),
                   ...currentQuestion.options.asMap().entries.map((entry) {
@@ -265,14 +274,16 @@ class _RealtimeMatchGameScreenState
                             );
                           }
 
-                          // 소켓으로 진행 상황 전송
+                          // 서버로 답안 제출
                           final socketService = ref.read(socketServiceProvider);
-                          socketService.sendGameProgress(
-                            matchId: widget.matchId ?? '',
-                            userId: currentUser?.id ?? '',
-                            progress: _currentQuestionIndex + 1,
-                            correctCount: _results.values.where((r) => r).length,
-                          );
+                          if (currentUser != null && widget.matchId != null) {
+                            socketService.submitAnswer(
+                              widget.matchId!,
+                              currentUser.id,
+                              _currentQuestionIndex,
+                              option,
+                            );
+                          }
                         }
                       },
                     );
@@ -327,9 +338,9 @@ class _RealtimeMatchGameScreenState
   }
 
   Widget _buildPlayerInfo() {
-    final playerProgress = _currentQuestionIndex + 1;
+    // 실제로 답안을 제출한 문제의 개수 (답안을 제출해야 카운트)
+    final playerProgress = _answers.length;
     final opponentProgress = ref.watch(opponentProgressProvider);
-    final currentUser = ref.read(currentUserProvider);
     final userProfile = ref.watch(userProfileProvider);
 
     return Container(
@@ -436,63 +447,3 @@ class _RealtimeMatchGameScreenState
     );
   }
 }
-
-class _ResultDialog extends StatelessWidget {
-  final Map<String, dynamic> result;
-  final int playerCorrectCount;
-  final int opponentCorrectCount;
-  final int timeSpent;
-  final VoidCallback onHome;
-  final VoidCallback onRetry;
-
-  const _ResultDialog({
-    required this.result,
-    required this.playerCorrectCount,
-    required this.opponentCorrectCount,
-    required this.timeSpent,
-    required this.onHome,
-    required this.onRetry,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final resultType = result['result'] ?? 'draw';
-    final isWin = resultType == 'win';
-    final isLose = resultType == 'lose';
-
-    return AlertDialog(
-      title: Text(
-        isWin ? '승리!' : isLose ? '패배' : '무승부',
-        style: TextStyle(
-          color: isWin
-              ? AppColors.difficultyBeginner
-              : isLose
-                  ? AppColors.difficultyExpert
-                  : AppColors.textSecondary,
-        ),
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('내 정답: $playerCorrectCount개'),
-          Text('상대 정답: $opponentCorrectCount개'),
-          Text('소요 시간: ${Helpers.formatTime(timeSpent)}'),
-          if (result['rating_change'] != null)
-            Text('레이팅 변화: ${result['rating_change']}'),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: onHome,
-          child: const Text('홈으로'),
-        ),
-        TextButton(
-          onPressed: onRetry,
-          child: const Text('다시하기'),
-        ),
-      ],
-    );
-  }
-}
-

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../config/colors.dart';
-import '../../services/auth_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/validators.dart';
 import '../../widgets/auth/google_sign_in_button.dart';
@@ -44,16 +44,32 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       if (mounted) {
         context.go('/home');
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString()),
-            backgroundColor: AppColors.difficultyExpert,
-          ),
-        );
-      }
-    } finally {
+        } catch (e) {
+          if (mounted) {
+            String errorMessage = '로그인 실패';
+            if (e is AuthException) {
+              // 사용자 친화적인 에러 메시지로 변환
+              if (e.message.contains('Invalid login credentials') || 
+                  e.message.contains('invalid_credentials')) {
+                errorMessage = '이메일 또는 비밀번호가 올바르지 않습니다';
+              } else {
+                errorMessage = e.message;
+              }
+              debugPrint('❌ Supabase Auth 에러: ${e.message}');
+              debugPrint('❌ 에러 상태 코드: ${e.statusCode}');
+            } else {
+              debugPrint('❌ 로그인 에러: $e');
+              errorMessage = e.toString();
+            }
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(errorMessage),
+                backgroundColor: AppColors.difficultyExpert,
+                duration: const Duration(seconds: 5),
+              ),
+            );
+          }
+        } finally {
       if (mounted) {
         setState(() => _isLoading = false);
       }

@@ -61,25 +61,20 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
           .eq('user_id', currentUser.id)
           .eq('status', 'accepted');
 
-      if (response != null && response is List) {
-        final friendsList = (response as List)
-            .map((item) {
-              final friendData = item['users'];
-              if (friendData != null) {
-                return UserModel.fromSupabase(friendData as Map<String, dynamic>);
-              }
-              return null;
-            })
-            .whereType<UserModel>()
-            .toList();
-        
-        setState(() {
-          _friends = friendsList;
-          _isLoading = false;
-        });
-      } else {
-        setState(() => _isLoading = false);
-      }
+      final friendsList = (response as List)
+          .map((item) {
+            final friendData = item['users'];
+            if (friendData != null) {
+              return UserModel.fromSupabase(friendData as Map<String, dynamic>);
+            }
+            return null;
+          })
+          .whereType<UserModel>()
+          .toList();
+      setState(() {
+        _friends = friendsList;
+        _isLoading = false;
+      });
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -129,18 +124,13 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
       
       final response = await queryBuilder.limit(20);
 
-      if (response != null && response is List) {
-        final usersList = (response as List)
-            .map((data) => UserModel.fromSupabase(data as Map<String, dynamic>))
-            .toList();
-
-        setState(() {
-          _searchResults = usersList;
-          _isSearching = false;
-        });
-      } else {
-        setState(() => _isSearching = false);
-      }
+      final usersList = (response as List)
+          .map((data) => UserModel.fromSupabase(data as Map<String, dynamic>))
+          .toList();
+      setState(() {
+        _searchResults = usersList;
+        _isSearching = false;
+      });
     } catch (e) {
       setState(() => _isSearching = false);
       if (mounted) {
@@ -348,7 +338,7 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha:0.05),
             blurRadius: 4,
             offset: const Offset(0, 2),
           ),
@@ -404,7 +394,7 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.1),
+                color: AppColors.primary.withValues(alpha:0.1),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: const Text(

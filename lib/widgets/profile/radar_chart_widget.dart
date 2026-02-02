@@ -56,14 +56,14 @@ class RadarChartPainter extends CustomPainter {
     if (statCount < 3) return; // 최소 3개 이상 필요
     if (statCount != 8) {
       // 8개가 아니면 경고 (디버그용)
-      print('Warning: Radar chart expects 8 categories, got $statCount');
+      debugPrint('Warning: Radar chart expects 8 categories, got $statCount');
     }
 
     final angleStep = 2 * math.pi / statCount;
 
     // 배경 그리드 (5단계)
     final gridPaint = Paint()
-      ..color = AppColors.borderGray.withOpacity(0.2)
+      ..color = AppColors.borderGray.withValues(alpha:0.2)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
 
@@ -86,7 +86,7 @@ class RadarChartPainter extends CustomPainter {
 
     // 축선 그리기
     final axisPaint = Paint()
-      ..color = AppColors.borderGray.withOpacity(0.4)
+      ..color = AppColors.borderGray.withValues(alpha:0.4)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
 
@@ -176,7 +176,7 @@ class RadarChartPainter extends CustomPainter {
 
     // 능력치 영역 채우기
     final fillPaint = Paint()
-      ..color = fillColor.withOpacity(0.3)
+      ..color = fillColor.withValues(alpha:0.3)
       ..style = PaintingStyle.fill;
     canvas.drawPath(dataPath, fillPaint);
 

@@ -26,3 +26,4 @@ COMMENT ON COLUMN matches.mode IS '게임 모드 (1v1, tournament, friend_match 
 
 
 
+

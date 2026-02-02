@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/user.dart';
 import '../utils/constants.dart';
 import 'supabase_service.dart';
@@ -27,9 +28,17 @@ class AuthService {
   }
 
   Future<bool> signInWithGoogle() async {
+    // 웹: 현재 실행 중인 origin으로 리다이렉트 (예: http://localhost:<port>/)
+    // 모바일: 딥링크 사용
+    final redirect = kIsWeb
+        ? Uri.base
+            .replace(path: '/', fragment: '') // 해시라우터 대비 fragment 제거
+            .toString()
+        : 'io.supabase.flutterquickstart://login-callback/';
+
     return await _auth.signInWithOAuth(
       OAuthProvider.google,
-      redirectTo: 'io.supabase.flutterquickstart://login-callback/',
+      redirectTo: redirect,
     );
   }
 
@@ -71,10 +80,6 @@ class AuthService {
         .select()
         .eq('id', userId)
         .single();
-
-    if (response == null) {
-      throw Exception('User not found');
-    }
 
     return UserModel.fromSupabase(response);
   }

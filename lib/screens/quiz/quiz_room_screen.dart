@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../config/colors.dart';
 import '../../models/quiz_question.dart';
 import '../../providers/quiz_provider.dart';
-import '../../services/quiz_service.dart';
 import '../../widgets/quiz/question_card.dart';
 import '../../widgets/quiz/answer_button.dart';
 import '../../widgets/quiz/progress_bar.dart';
@@ -23,7 +22,7 @@ class QuizRoomScreen extends ConsumerStatefulWidget {
 class _QuizRoomScreenState extends ConsumerState<QuizRoomScreen> {
   String? _selectedAnswer;
   bool _showResult = false;
-  Map<int, bool> _results = {};
+  final Map<int, bool> _results = {};
 
   @override
   Widget build(BuildContext context) {

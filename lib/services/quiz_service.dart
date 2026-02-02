@@ -30,19 +30,17 @@ class QuizService {
   }
 
   Future<QuizQuestion?> getQuestionById(String questionId) async {
-    // bigserial ID는 정수이므로 int로 변환 시도
-    final id = int.tryParse(questionId) ?? questionId;
-    final response = await supabase
-        .from(AppConstants.quizQuestionsCollection)
-        .select()
-        .eq('id', id)
-        .single();
-
-    if (response == null) {
+    try {
+      final id = int.tryParse(questionId) ?? questionId;
+      final response = await supabase
+          .from(AppConstants.quizQuestionsCollection)
+          .select()
+          .eq('id', id)
+          .single();
+      return QuizQuestion.fromSupabase(response);
+    } catch (_) {
       return null;
     }
-
-    return QuizQuestion.fromSupabase(response as Map<String, dynamic>);
   }
 
   Future<void> saveQuizResult({
